@@ -1,0 +1,214 @@
+---
+title: "Airbnb user booking prediction"
+author: "Group 5"
+date: "27 November 2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+packages_to_install <- c("rworldmap","tidyverse","ggplot2","mltools","data.table","nnet","caret","FNN","gmodels","MASS","randomForest","DiscriMiner")
+
+new_packages <- packages_to_install[!(packages_to_install %in% installed.packages()[,"Package"])]
+
+packages_to_install <- c("rworldmap","tidyverse","ggplot2","mltools","data.table","nnet","caret","FNN","gmodels","MASS","randomForest","DiscriMiner")
+
+new_packages <- packages_to_install[!(packages_to_install %in% installed.packages()[,"Package"])]
+
+if(length(new_packages)) install.packages(new_packages)
+
+sapply(packages_to_install,library,character.only=T)
+
+```
+
+
+Reading the training dataset and writing a cleaning dataset
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train <- read.csv("train_users_2.csv",stringsAsFactors = FALSE)
+
+clean_data <- function(airbnb.data){
+  airbnb.data[airbnb.data==""] <- NA
+  airbnb.data[airbnb.data=="-unknown-"] <- NA
+  airbnb.data[airbnb.data=="<NA>"] <- NA
+  
+  #cleaning age variable
+  airbnb.data <- airbnb.data %>%
+    mutate(
+      age_cleaned = ifelse(age < 14 | age > 100,0,age),
+      age_bucket = cut(age_cleaned,breaks = c(seq(14,100,4)))
+      
+    )
+  
+  #creating day, month, year combinations from dates
+  options("scipen"=999)
+  airbnb.data <- airbnb.data %>%
+    mutate(
+      account_created_day = as.integer(substring(date_account_created,9,10)),
+      account_created_month = as.integer(substring(date_account_created,6,7)),
+      account_created_year = as.integer(substring(date_account_created,1,4)),
+      
+      first_active = as.double(timestamp_first_active),
+      first_active_year = as.integer(substring(as.character(first_active),1,4)),
+      first_active_month = as.integer(substring(as.character(first_active),5,6)),
+      first_active_day = as.integer(substring(as.character(first_active),7,8))
+    )
+  as.double(airbnb.train$timestamp_first_active)
+  airbnb.data$date_account_created <- NULL
+  airbnb.data$timestamp_first_active <- NULL
+  airbnb.data$first_active <- NULL
+  airbnb.data$age_cleaned <- NULL
+  airbnb.data$age <- NULL
+  airbnb.data$date_first_booking <- NULL
+  return(airbnb.data)
+}
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train.cleaned <- clean_data(airbnb.train)
+
+airbnb.train.cleaned %>% mutate_if(is.character, as.factor) -> airbnb.train.cleaned
+airbnb.train.cleaned$id <- as.character(airbnb.train.cleaned$id)
+rownames(airbnb.train.cleaned) <- airbnb.train.cleaned$id
+airbnb.train.cleaned$id <- NULL
+
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+table(airbnb.train$country_destination)
+
+country_count <-as.data.frame(table(airbnb.train$country_destination))
+
+
+ggplot(country_count, aes(x = reorder(country_count$Var1, -country_count$Freq) , y = country_count$Freq,fill = country_count$Var1))+ geom_bar(stat="identity")+ ggtitle("Frequency Distribution of First Destination Travel") +
+  labs(x="Country",y="Traveler's Frequency") +theme_minimal() + guides(fill=guide_legend(title="Country Name"))
+
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+gender_count <-as.data.frame(table(airbnb.train$gender))
+
+
+ggplot(gender_count, aes(x = reorder(gender_count$Var1, -gender_count$Freq) , y = gender_count$Freq,fill=gender_count$Var1))+ geom_bar(stat="identity")+ggtitle("Distribution of User's Gender") +
+  labs(x="Gender",y="Gender Frequency") +theme_minimal() + guides(fill=guide_legend(title="Gender"))
+
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+lang_country <- cbind.data.frame(airbnb.train$country_destination,airbnb.train$language)
+
+
+lang_country.tab <- table(lang_country$`airbnb.train$language`,lang_country$`airbnb.train$country_destination`)
+
+
+lang_country_count <- as.data.frame(lang_country.tab)
+
+
+lang_country_count[order(lang_country_count$Freq,decreasing = T),]
+
+
+ggplot(data = lang_country_count, aes(x = lang_country_count$Var1, y =lang_country_count$Freq , fill = lang_country_count$Var2)) + geom_bar(stat = "identity",position="fill")+ggtitle("Language Influence on Booking Destination") +
+  labs(x="Language",y="Frequency Percentage") +theme_minimal()+coord_flip()+ guides(fill=guide_legend(title="Country"))
+
+```
+
+Understanding the distribution of Age
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+a2 <- qplot(x = gender, y = age, data = airbnb.train, 
+      geom = "boxplot") +
+  coord_cartesian(ylim = c(14,100))
+a2
+```
+
+Age by a Destination Country
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(airbnb.train, aes(airbnb.train$age)) +
+  geom_histogram(binwidth = 1, color = 'black', fill = '#099DD9') +
+  xlim(18,75) +
+  facet_wrap(~country_destination, ncol = 3, scales = "free")
+
+```
+
+Age on a Map of Destination Countries
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(rworldmap)
+airbnb.train.age.summ <- summarise(group_by(airbnb.train, country_destination), 
+                         medianAge = median(age, na.rm = TRUE),
+                         meanAge = mean(age, na.rm = TRUE),
+                         sdAge = sd(age, na.rm = TRUE))
+
+MAAU <- joinCountryData2Map(subset(airbnb.train.age.summ, country_destination != "other" & country_destination != "NDF"),
+                            joinCode="ISO_A2", 
+                            nameJoinColumn="country_destination")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+mapCountryData(MAAU, 
+               nameColumnToPlot="meanAge", 
+               catMethod="fixedWidth", 
+               numCats=10,
+               mapTitle = "Mean Age of Airbnb Users"
+               )
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#plots
+t <- as.data.frame(table(airbnb.train.cleaned$gender))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+ labs(x="gender",y="Frequency",title="Gender Distributions")
+
+
+t <- as.data.frame(table(airbnb.train.cleaned$signup_method))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+labs(x="signup_method",y="Frequency",title="Signup_method distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$signup_flow))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+labs(x="signup_flow",y="Fequency",title="Signup_flow distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$language))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+labs(x="language",y="frequency",title="language distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$affiliate_channel))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="affiliate_channel",y="Fequency",title="affiliate_channel distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$affiliate_provider))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="affiliate_provider",y="Fequency",title="affiliate_provider distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$first_affiliate_tracked))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="first_affiliate_tracked",y="Fequency",title="first_affiliate_tracked distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$signup_app))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="signup_app",y="Fequency",title="signup_app distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$first_device_type))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="first_device_type",y="Fequency",title="first_device_type distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$first_browser))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="first_browser",y="Fequency",title="first_browser distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$country_destination))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="country_destination",y="Fequency",title="country_destination distribution")
+
+t <- as.data.frame(table(airbnb.train.cleaned$age_bucket))
+ggplot(t,aes(x =t$Var1,y = t$Freq)) + geom_bar(stat="identity")+
+  labs(x="age_bucket",y="Fequency",title="age_bucket distribution")
+
+```

@@ -1,6 +1,8 @@
 The main purpose of the project is to solve the Kaggle's challenge hosted by Airbnb called "Airbnb New User Bookings" in the website  https://www.kaggle.com/c/airbnb-recruiting-new-user-bookings/data. 
 
 Tool used: R Studio
+
+
 Due to the performance constraints I have partitioned the training data set into training and test.
 The file uploaded in the repository is a .RMD file which has chunks of code as well as its purpose.
 
